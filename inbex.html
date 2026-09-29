@@ -1,0 +1,516 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Парковки Краснодара</title>
+    
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        }
+        
+        body {
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            overflow: hidden;
+        }
+        
+        #map {
+            flex: 1;
+            width: 100%;
+            z-index: 1;
+        }
+        
+        .panel {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: white;
+            border-radius: 20px 20px 0 0;
+            box-shadow: 0 -4px 20px rgba(0,0,0,0.15);
+            padding: 16px;
+            z-index: 1000;
+            max-height: 45vh;
+            overflow-y: auto;
+        }
+        
+        .panel-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+        
+        .panel-header h2 {
+            font-size: 16px;
+            color: #333;
+        }
+        
+        .btn {
+            border: none;
+            border-radius: 12px;
+            padding: 12px 20px;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            width: 100%;
+            margin-bottom: 8px;
+        }
+        
+        .btn:active {
+            transform: scale(0.97);
+        }
+        
+        .btn-primary {
+            background: #007AFF;
+            color: white;
+        }
+        
+        .btn-success {
+            background: #34C759;
+            color: white;
+        }
+        
+        .btn-danger {
+            background: #FF3B30;
+            color: white;
+        }
+        
+        .btn-secondary {
+            background: #F2F2F7;
+            color: #007AFF;
+        }
+        
+        .timer {
+            text-align: center;
+            font-size: 32px;
+            font-weight: 700;
+            color: #007AFF;
+            padding: 12px 0;
+            font-variant-numeric: tabular-nums;
+        }
+        
+        .timer-label {
+            text-align: center;
+            font-size: 13px;
+            color: #8E8E93;
+            margin-bottom: 8px;
+        }
+        
+        .status-badge {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 8px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        
+        .status-free { background: #D4F5DD; color: #1B7A34; }
+        .status-occupied { background: #FFF3CD; color: #856404; }
+        .status-paid { background: #FFD4D4; color: #C41E1E; }
+        
+        .history-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px;
+            background: #F9F9F9;
+            border-radius: 10px;
+            margin-bottom: 6px;
+            font-size: 13px;
+        }
+        
+        .history-item .time {
+            color: #8E8E93;
+            font-size: 12px;
+        }
+        
+        .empty-state {
+            text-align: center;
+            color: #8E8E93;
+            font-size: 14px;
+            padding: 20px;
+        }
+        
+        .toast {
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0,0,0,0.8);
+            color: white;
+            padding: 12px 24px;
+            border-radius: 12px;
+            font-size: 14px;
+            z-index: 2000;
+            opacity: 0;
+            transition: opacity 0.3s;
+            pointer-events: none;
+        }
+        
+        .toast.show {
+            opacity: 1;
+        }
+        
+        .leaflet-control-attribution {
+            font-size: 10px !important;
+        }
+    </style>
+</head>
+<body>
+
+<div id="map"></div>
+
+<div class="panel" id="panel">
+    <div class="panel-header">
+        <h2>🅿️ Парковки Краснодара</h2>
+        <span id="location-status" style="font-size:12px; color:#8E8E93;">Определяю...</span>
+    </div>
+    
+    <div id="active-parking" style="display:none;">
+        <div class="timer-label">Вы припаркованы</div>
+        <div class="timer" id="timer">00:00:00</div>
+        <button class="btn btn-danger" onclick="endParking()">🚗 Я уехал</button>
+        <button class="btn btn-success" onclick="freeSpot()">🟢 Освободил место</button>
+    </div>
+    
+    <div id="no-parking">
+        <button class="btn btn-primary" onclick="startParking()">📍 Я припарковался</button>
+        <button class="btn btn-secondary" onclick="showHistory()">📋 История парковок</button>
+        <button class="btn btn-secondary" onclick="showFreeSpots()">🟢 Свободные места рядом</button>
+    </div>
+    
+    <div id="history-view" style="display:none;">
+        <div class="panel-header">
+            <h2>История</h2>
+            <button class="btn-secondary" style="width:auto; padding:6px 12px; margin:0;" onclick="hideHistory()">Закрыть</button>
+        </div>
+        <div id="history-list"></div>
+    </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<!-- Leaflet JS -->
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+<script>
+// ============ КОНФИГ ============
+const KRASNODAR_CENTER = [45.0355, 38.9753];
+const DEFAULT_ZOOM = 14;
+const FREE_SPOT_DURATION = 15 * 60 * 1000; // 15 минут
+
+// ============ СОСТОЯНИЕ ============
+let map;
+let userMarker = null;
+let parkingMarker = null;
+let freeSpotMarkers = [];
+let timerInterval = null;
+let userLocation = null;
+
+// ============ ИНИЦИАЛИЗАЦИЯ КАРТЫ ============
+function initMap() {
+    map = L.map('map', {
+        center: KRASNODAR_CENTER,
+        zoom: DEFAULT_ZOOM,
+        zoomControl: false
+    });
+    
+    L.control.zoom({ position: 'topright' }).addTo(map);
+    
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '© OpenStreetMap',
+        maxZoom: 19
+    }).addTo(map);
+    
+    // Пытаемся определить геолокацию
+    if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(
+            (pos) => {
+                userLocation = [pos.coords.latitude, pos.coords.longitude];
+                map.setView(userLocation, 15);
+                addUserMarker(userLocation);
+                document.getElementById('location-status').textContent = '📍 Вы здесь';
+            },
+            (err) => {
+                document.getElementById('location-status').textContent = 'Геолокация недоступна';
+                console.log('Геолокация:', err.message);
+            },
+            { enableHighAccuracy: true, timeout: 10000 }
+        );
+    }
+}
+
+function addUserMarker(latlng) {
+    if (userMarker) map.removeLayer(userMarker);
+    userMarker = L.circleMarker(latlng, {
+        radius: 8,
+        fillColor: '#007AFF',
+        color: 'white',
+        weight: 3,
+        fillOpacity: 1
+    }).addTo(map).bindPopup('Вы здесь');
+}
+
+// ============ ПАРКОВКА ============
+function startParking() {
+    if (!userLocation) {
+        // Если геолокация недоступна, используем центр карты
+        userLocation = map.getCenter();
+    }
+    
+    const parking = {
+        lat: userLocation[0],
+        lng: userLocation[1],
+        startTime: Date.now(),
+        active: true
+    };
+    
+    localStorage.setItem('activeParking', JSON.stringify(parking));
+    
+    // Добавляем маркер
+    if (parkingMarker) map.removeLayer(parkingMarker);
+    parkingMarker = L.marker(userLocation, {
+        icon: L.divIcon({
+            className: 'custom-marker',
+            html: '<div style="background:#FF3B30; width:24px; height:24px; border-radius:50%; border:3px solid white; box-shadow:0 2px 6px rgba(0,0,0,0.3); display:flex; align-items:center; justify-content:center; font-size:12px;">🚗</div>',
+            iconSize: [24, 24],
+            iconAnchor: [12, 12]
+        })
+    }).addTo(map).bindPopup('Ваша парковка');
+    
+    showActiveParking();
+    showToast('📍 Парковка начата');
+}
+
+function endParking() {
+    const parking = JSON.parse(localStorage.getItem('activeParking') || 'null');
+    if (parking) {
+        // Сохраняем в историю
+        const history = JSON.parse(localStorage.getItem('parkingHistory') || '[]');
+        history.unshift({
+            lat: parking.lat,
+            lng: parking.lng,
+            startTime: parking.startTime,
+            endTime: Date.now()
+        });
+        // Оставляем только последние 50
+        localStorage.setItem('parkingHistory', JSON.stringify(history.slice(0, 50)));
+    }
+    
+    localStorage.removeItem('activeParking');
+    
+    if (parkingMarker) {
+        map.removeLayer(parkingMarker);
+        parkingMarker = null;
+    }
+    
+    if (timerInterval) {
+        clearInterval(timerInterval);
+        timerInterval = null;
+    }
+    
+    showNoParking();
+    showToast('🚗 Парковка завершена');
+}
+
+function freeSpot() {
+    const center = map.getCenter();
+    const spot = {
+        lat: center.lat,
+        lng: center.lng,
+        time: Date.now()
+    };
+    
+    // Сохраняем в localStorage
+    const spots = JSON.parse(localStorage.getItem('freeSpots') || '[]');
+    spots.push(spot);
+    localStorage.setItem('freeSpots', JSON.stringify(spots));
+    
+    // Добавляем маркер
+    const marker = L.circleMarker([spot.lat, spot.lng], {
+        radius: 10,
+        fillColor: '#34C759',
+        color: 'white',
+        weight: 3,
+        fillOpacity: 0.9
+    }).addTo(map).bindPopup('🟢 Свободно (15 мин)');
+    
+    freeSpotMarkers.push({ marker, time: spot.time });
+    
+    // Автоудаление через 15 минут
+    setTimeout(() => {
+        if (map.hasLayer(marker)) map.removeLayer(marker);
+        const idx = freeSpotMarkers.findIndex(s => s.marker === marker);
+        if (idx > -1) freeSpotMarkers.splice(idx, 1);
+        // Удаляем из localStorage
+        const stored = JSON.parse(localStorage.getItem('freeSpots') || '[]');
+        const filtered = stored.filter(s => s.time !== spot.time);
+        localStorage.setItem('freeSpots', JSON.stringify(filtered));
+    }, FREE_SPOT_DURATION);
+    
+    endParking();
+    showToast('🟢 Место отмечено свободным');
+}
+
+function showFreeSpots() {
+    const spots = JSON.parse(localStorage.getItem('freeSpots') || '[]');
+    const now = Date.now();
+    
+    // Убираем устаревшие
+    const active = spots.filter(s => now - s.time < FREE_SPOT_DURATION);
+    
+    // Очищаем старые маркеры
+    freeSpotMarkers.forEach(s => {
+        if (map.hasLayer(s.marker)) map.removeLayer(s.marker);
+    });
+    freeSpotMarkers = [];
+    
+    if (active.length === 0) {
+        showToast('Пока нет свободных мест рядом');
+        return;
+    }
+    
+    active.forEach(spot => {
+        const marker = L.circleMarker([spot.lat, spot.lng], {
+            radius: 10,
+            fillColor: '#34C759',
+            color: 'white',
+            weight: 3,
+            fillOpacity: 0.9
+        }).addTo(map).bindPopup(`🟢 Свободно (${Math.round((FREE_SPOT_DURATION - (now - spot.time)) / 60000)} мин)`);
+        freeSpotMarkers.push({ marker, time: spot.time });
+    });
+    
+    // Приближаем карту к первому месту
+    if (active.length > 0) {
+        map.setView([active[0].lat, active[0].lng], 16);
+    }
+    
+    showToast(`🟢 Найдено ${active.length} мест`);
+}
+
+// ============ UI ============
+function showActiveParking() {
+    document.getElementById('active-parking').style.display = 'block';
+    document.getElementById('no-parking').style.display = 'none';
+    document.getElementById('history-view').style.display = 'none';
+    startTimer();
+}
+
+function showNoParking() {
+    document.getElementById('active-parking').style.display = 'none';
+    document.getElementById('no-parking').style.display = 'block';
+    document.getElementById('history-view').style.display = 'none';
+    if (timerInterval) {
+        clearInterval(timerInterval);
+        timerInterval = null;
+    }
+}
+
+function startTimer() {
+    if (timerInterval) clearInterval(timerInterval);
+    
+    const update = () => {
+        const parking = JSON.parse(localStorage.getItem('activeParking') || 'null');
+        if (!parking) {
+            showNoParking();
+            return;
+        }
+        const elapsed = Date.now() - parking.startTime;
+        const h = Math.floor(elapsed / 3600000);
+        const m = Math.floor((elapsed % 3600000) / 60000);
+        const s = Math.floor((elapsed % 60000) / 1000);
+        document.getElementById('timer').textContent =
+            `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+    };
+    
+    update();
+    timerInterval = setInterval(update, 1000);
+}
+
+function showHistory() {
+    const history = JSON.parse(localStorage.getItem('parkingHistory') || '[]');
+    const list = document.getElementById('history-list');
+    
+    if (history.length === 0) {
+        list.innerHTML = '<div class="empty-state">Пока нет записей</div>';
+    } else {
+        list.innerHTML = history.map(item => {
+            const date = new Date(item.startTime);
+            const duration = Math.round((item.endTime - item.startTime) / 60000);
+            return `
+                <div class="history-item">
+                    <div>
+                        <div>${date.toLocaleDateString('ru-RU')} ${date.toLocaleTimeString('ru-RU', {hour:'2-digit', minute:'2-digit'})}</div>
+                        <div class="time">${duration} мин</div>
+                    </div>
+                    <span class="status-badge status-occupied">завершено</span>
+                </div>
+            `;
+        }).join('');
+    }
+    
+    document.getElementById('no-parking').style.display = 'none';
+    document.getElementById('active-parking').style.display = 'none';
+    document.getElementById('history-view').style.display = 'block';
+}
+
+function hideHistory() {
+    document.getElementById('history-view').style.display = 'none';
+    document.getElementById('no-parking').style.display = 'block';
+}
+
+function showToast(msg) {
+    const toast = document.getElementById('toast');
+    toast.textContent = msg;
+    toast.classList.add('show');
+    setTimeout(() => toast.classList.remove('show'), 2000);
+}
+
+// ============ ВОССТАНОВЛЕНИЕ ПРИ ЗАГРУЗКЕ ============
+function restoreState() {
+    const parking = JSON.parse(localStorage.getItem('activeParking') || 'null');
+    if (parking && parking.active) {
+        // Восстанавливаем маркер
+        parkingMarker = L.marker([parking.lat, parking.lng], {
+            icon: L.divIcon({
+                className: 'custom-marker',
+                html: '<div style="background:#FF3B30; width:24px; height:24px; border-radius:50%; border:3px solid white; box-shadow:0 2px 6px rgba(0,0,0,0.3); display:flex; align-items:center; justify-content:center; font-size:12px;">🚗</div>',
+                iconSize: [24, 24],
+                iconAnchor: [12, 12]
+            })
+        }).addTo(map).bindPopup('Ваша парковка');
+        
+        showActiveParking();
+    } else {
+        showNoParking();
+    }
+    
+    // Восстанавливаем свободные места
+    const spots = JSON.parse(localStorage.getItem('freeSpots') || '[]');
+    const now = Date.now();
+    const active = spots.filter(s => now - s.time < FREE_SPOT_DURATION);
+    localStorage.setItem('freeSpots', JSON.stringify(active));
+}
+
+// ============ ЗАПУСК ============
+document.addEventListener('DOMContentLoaded', () => {
+    initMap();
+    // Небольшая задержка, чтобы карта успела инициализироваться
+    setTimeout(restoreState, 500);
+});
+</script>
+
+</body>
+</html>
